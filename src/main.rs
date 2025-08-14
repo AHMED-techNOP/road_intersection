@@ -1,180 +1,156 @@
-mod roads;
-mod traffic_lights;
-mod vehicles;
-mod simulation;
-mod input;
 
-extern crate sdl2;
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
-use sdl2::pixels::Color;
-use std::time::Duration;
+use macroquad::prelude::*;
 
-fn draw_roads(canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) {
-    // Road dimensions
-    let road_width = 100;
-    let window_width = 800;
-    let window_height = 600;
+// Import our custom modules
+mod types;
+mod traffic;
+mod cars;
+mod graphics;
 
-    // Draw horizontal road
-    canvas.set_draw_color(Color::RGB(60, 60, 60));
-    let _ = canvas.fill_rect(sdl2::rect::Rect::new(
-        0,
-        (window_height / 2) - (road_width / 2),
-        window_width as u32,
-        road_width as u32,
-    ));
+// Import everything we need from our modules
+use types::*;
+use traffic::*;
+use cars::*;
+use graphics::*;
 
-    // Draw vertical road
-    let _ = canvas.fill_rect(sdl2::rect::Rect::new(
-        (window_width / 2) - (road_width / 2),
-        0,
-        road_width as u32,
-        window_height as u32,
-    ));
-}
+// ========================================
+// WINDOW SETUP
+// ========================================
 
-fn draw_traffic_lights(canvas: &mut sdl2::render::Canvas<sdl2::video::Window>) {
-    use sdl2::rect::Rect;
-    let light_radius = 15;
-    let road_width = 100;
-    let window_width = 800;
-    let window_height = 600;
-    let center_x = window_width / 2;
-    let center_y = window_height / 2;
-
-    // North (entering from top, flush with intersection)
-    let north = (
-        center_x - (road_width / 2) - (light_radius * 2),
-        center_y - (road_width / 2) - (light_radius * 2),
-    );
-    // South (entering from bottom, flush with intersection)
-    let south = (
-        center_x + (road_width / 2) ,
-        center_y + (road_width / 2),
-    );
-    // West (entering from left, flush with intersection)
-    let west = (
-        center_x - (road_width / 2) - (light_radius * 2),
-        center_y + (road_width / 2) ,
-    );
-    // East (entering from right, flush with intersection)
-    let east = (
-        center_x + (road_width / 2),
-        center_y - (road_width / 2) - (light_radius * 2),
-    );
-
-    let lights = [north, south, west, east];
-    for &(x, y) in &lights {
-        canvas.set_draw_color(Color::RGB(200, 0, 0)); // Red border only
-        let _ = canvas.draw_rect(Rect::new(x, y, (light_radius * 2) as u32, (light_radius * 2) as u32));
+// Configure the game window
+fn window_conf() -> Conf {
+    Conf {
+        window_title: "Traffic Intersection Simulator".to_string(),
+        window_width: 1000,          // Window width in pixels
+        window_height: 800,          // Window height in pixels
+        window_resizable: false,     // Don't allow window resizing
+        fullscreen: false,           // Run in windowed mode (not fullscreen)
+        ..Default::default()
     }
 }
 
-struct Vehicle {
-    position: (f32, f32),
-    direction: (f32, f32),
-    color: Color,
-}
+#[macroquad::main(window_conf)]
+async fn main() {
+    let screen_center_x = screen_width() / 2.0;
+    let screen_center_y = screen_height() / 2.0;
 
-fn spawn_vehicle(key: Keycode) -> Option<Vehicle> {
-    let road_width = 100.0;
-    let window_width = 800.0;
-    let window_height = 600.0;
-    let center_x = window_width / 2.0;
-    let center_y = window_height / 2.0;
-    let vehicle_size = 20.0;
-    match key {
-        Keycode::Up => Some(Vehicle {
-            position: (center_x - road_width / 4.0 - vehicle_size / 2.0, window_height - vehicle_size),
-            direction: (0.0, -1.0),
-            color: Color::RGB(0, 200, 0),
-        }),
-        Keycode::Down => Some(Vehicle {
-            position: (center_x + road_width / 4.0 - vehicle_size / 2.0, 0.0),
-            direction: (0.0, 1.0),
-            color: Color::RGB(0, 0, 200),
-        }),
-        Keycode::Left => Some(Vehicle {
-            position: (window_width - vehicle_size, center_y + road_width / 4.0 - vehicle_size / 2.0),
-            direction: (-1.0, 0.0),
-            color: Color::RGB(200, 200, 0),
-        }),
-        Keycode::Right => Some(Vehicle {
-            position: (0.0, center_y - road_width / 4.0 - vehicle_size / 2.0),
-            direction: (1.0, 0.0),
-            color: Color::RGB(200, 0, 200),
-        }),
-        _ => None,
-    }
-}
+    // Car spawn points
+    let spawn_point_0_x = screen_center_x - INTERSECTION_SIZE;
+    let spawn_point_0_y = 0.0;
+    let spawn_point_1_x = screen_center_x;
+    let spawn_point_1_y = screen_height() - INTERSECTION_SIZE;
+    let spawn_point_2_x = 0.0;
+    let spawn_point_2_y = screen_height() / 2.0;
+    let spawn_point_3_x = screen_width() - INTERSECTION_SIZE;
+    let spawn_point_3_y = screen_height() / 2.0 - INTERSECTION_SIZE;
 
-fn draw_vehicles(canvas: &mut sdl2::render::Canvas<sdl2::video::Window>, vehicles: &Vec<Vehicle>) {
-    use sdl2::rect::Rect;
-    let vehicle_size = 20;
-    for v in vehicles {
-        canvas.set_draw_color(v.color);
-        let _ = canvas.fill_rect(Rect::new(
-            v.position.0 as i32,
-            v.position.1 as i32,
-            vehicle_size,
-            vehicle_size,
-        ));
-    }
-}
+    // Create traffic lights
+    let mut lights: Vec<TrafficLight> = Vec::new();
+    
+    let light_0 = TrafficLight {
+        x: screen_center_x - 2.0 * INTERSECTION_SIZE,
+        y: screen_center_y - 2.0 * INTERSECTION_SIZE,
+        is_green: false,
+        direction_x: 0.0,
+        direction_y: 5.0,
+    };
+    lights.push(light_0);
+    
+    let light_1 = TrafficLight {
+        x: screen_center_x + INTERSECTION_SIZE,
+        y: screen_center_y - 2.0 * INTERSECTION_SIZE,
+        is_green: false,
+        direction_x: -5.0,
+        direction_y: 0.0,
+    };
+    lights.push(light_1);
+    
+    let light_2 = TrafficLight {
+        x: screen_center_x - 2.0 * INTERSECTION_SIZE,
+        y: screen_center_y + INTERSECTION_SIZE,
+        is_green: false,
+        direction_x: 5.0,
+        direction_y: 0.0,
+    };
+    lights.push(light_2);
+    
+    let light_3 = TrafficLight {
+        x: screen_center_x + INTERSECTION_SIZE,
+        y: screen_center_y + INTERSECTION_SIZE,
+        is_green: false,
+        direction_x: 0.0,
+        direction_y: -5.0,
+    };
+    lights.push(light_3);
 
-fn update_vehicles(vehicles: &mut Vec<Vehicle>) {
-    let speed = 2.0;
-    let window_width = 800.0;
-    let window_height = 600.0;
-    let vehicle_size = 20.0;
-    for v in vehicles.iter_mut() {
-        v.position.0 += v.direction.0 * speed;
-        v.position.1 += v.direction.1 * speed;
-    }
-    // Remove vehicles that are off-screen
-    vehicles.retain(|v| {
-        v.position.0 + vehicle_size > 0.0 && v.position.0 < window_width &&
-        v.position.1 + vehicle_size > 0.0 && v.position.1 < window_height
-    });
-}
+    let mut cars: Vec<Car> = Vec::new();
+    let mut last_spawn_time_0: f32 = 0.0;
+    let mut last_spawn_time_1: f32 = 0.0;
+    let mut last_spawn_time_2: f32 = 0.0;
+    let mut last_spawn_time_3: f32 = 0.0;
+    
+    let mut traffic_system = TrafficSystem {
+        current_green_light: 0,
+        is_green_phase: false,
+        last_switch_time: 0.0,
+    };
+    
+    // Order in which lights turn green (creates smooth traffic flow)
+    let light_order: [usize; 4] = [2, 0, 3, 1];  // Left, Top, Right, Bottom
 
-fn main() {
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
-
-    let window = video_subsystem
-        .window("Road Intersection Simulation", 800, 600)
-        .position_centered()
-        .build()
-        .unwrap();
-
-    let mut canvas = window.into_canvas().build().unwrap();
-    let mut event_pump = sdl_context.event_pump().unwrap();
-    let mut vehicles: Vec<Vehicle> = Vec::new();
-    'running: loop {
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(Keycode::Escape),
-                    ..
-                } => break 'running,
-                Event::KeyDown { keycode: Some(k), repeat: false, .. } => {
-                    if let Some(vehicle) = spawn_vehicle(k) {
-                        vehicles.push(vehicle);
-                    }
-                }
-                _ => {}
+    loop {
+        // Remove cars that are off screen
+        let mut i = 0;
+        while i < cars.len() {
+            let car = &cars[i];
+            if car.x < -INTERSECTION_SIZE || car.x > screen_width() + INTERSECTION_SIZE ||
+               car.y < -INTERSECTION_SIZE || car.y > screen_height() + INTERSECTION_SIZE {
+                cars.remove(i);
+            } else {
+                i += 1;
             }
         }
-        update_vehicles(&mut vehicles);
-        canvas.set_draw_color(Color::RGB(30, 30, 30));
-        canvas.clear();
-        draw_roads(&mut canvas);
-        draw_traffic_lights(&mut canvas);
-        draw_vehicles(&mut canvas, &vehicles);
-        canvas.present();
-        ::std::thread::sleep(Duration::from_millis(16));
+
+        // Update traffic lights
+        update_traffic_lights(&mut lights, &cars, &mut traffic_system, &light_order);
+
+        // Draw everything (background is handled in draw_roads)
+
+        if is_key_down(KeyCode::Escape) {
+            break;
+        }
+
+        // Handle car spawning with keyboard
+        if is_key_down(KeyCode::Down) {
+            try_spawn_car_0(spawn_point_0_x, spawn_point_0_y, &mut last_spawn_time_0, &mut cars);
+        }
+        if is_key_down(KeyCode::Up) {
+            try_spawn_car_1(spawn_point_1_x, spawn_point_1_y, &mut last_spawn_time_1, &mut cars);
+        }
+        if is_key_down(KeyCode::Right) {
+            try_spawn_car_2(spawn_point_2_x, spawn_point_2_y, &mut last_spawn_time_2, &mut cars);
+        }
+        if is_key_down(KeyCode::Left) {
+            try_spawn_car_3(spawn_point_3_x, spawn_point_3_y, &mut last_spawn_time_3, &mut cars);
+        }
+        if is_key_down(KeyCode::R) {
+            let random_choice = (rand::rand() % 4) as i32;
+            if random_choice == 0 {
+                try_spawn_car_0(spawn_point_0_x, spawn_point_0_y, &mut last_spawn_time_0, &mut cars);
+            } else if random_choice == 1 {
+                try_spawn_car_1(spawn_point_1_x, spawn_point_1_y, &mut last_spawn_time_1, &mut cars);
+            } else if random_choice == 2 {
+                try_spawn_car_2(spawn_point_2_x, spawn_point_2_y, &mut last_spawn_time_2, &mut cars);
+            } else {
+                try_spawn_car_3(spawn_point_3_x, spawn_point_3_y, &mut last_spawn_time_3, &mut cars);
+            }
+        }
+
+        // Draw everything in the right order
+        draw_roads(screen_center_x, screen_center_y);
+        draw_lights(&lights);
+        update_and_draw_cars(&mut cars, &lights);
+
+        next_frame().await;
     }
 }
